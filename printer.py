@@ -187,7 +187,6 @@ class TextCanvas:
         pf2 = self.pf2
         current_width = 0
         characters = {}
-        yielded = False
         
         for s in text:
             if s not in characters:
@@ -197,7 +196,6 @@ class TextCanvas:
             char = characters[s]
             if s == '\n' or current_width + char.width > self.width:
                 yield self.flush_canvas()
-                yielded = True
                 current_width = 0
                 if s in ' \n':
                     continue
@@ -217,8 +215,8 @@ class TextCanvas:
                         
             current_width += char.device_width
             
-        if not yielded:
-            yield self.flush_canvas()
+        # Always yield the final canvas
+        yield self.flush_canvas()
 
 # ============================================================================
 # Printer Commands (from catprinter/cmds.py)
@@ -262,9 +260,9 @@ CMD_LATTICE_END = bs([81, 120, -90, 0, 11, 0, -86, 85, 23, 0, 0, 0, 0, 0, 0, 0, 
 CMD_SET_PAPER = bs([81, 120, -95, 0, 2, 0, 48, 0, -7, -1])
 
 def cmd_feed_paper(how_much):
-    b_arr = bs([81, 120, -67, 0, 1, 0, how_much & 0xff, 0, 0xff])
-    b_arr[7] = chk_sum(b_arr, 6, 1)
-    return bs(b_arr)
+    b_arr = bs([81, 120, -95, 0, 2, 0, how_much & 0xff, 0, 0, 0xff])
+    b_arr[8] = chk_sum(b_arr, 6, 2)
+    return b_arr
 
 def cmd_set_energy(val):
     b_arr = bs([81, 120, -81, 0, 2, 0, (val >> 8) & 0xff, val & 0xff, 0, 0xff])
@@ -323,13 +321,14 @@ def cmd_print_row(img_row):
     b_arr[-2] = chk_sum(b_arr, 6, len(encoded_img))
     return b_arr
 
-def cmds_print_img(img, energy: int = 0xffff):
+def cmds_print_img(img, energy: int = 0xffff, extra_feed: int = 0):
     print(f"Debug: Creating print commands for {len(img)} rows")
     data = CMD_GET_DEV_STATE + CMD_SET_QUALITY_200_DPI + cmd_set_energy(energy) + cmd_apply_energy() + CMD_LATTICE_START
     for row in img:
         data += cmd_print_row(row)
-    data += cmd_feed_paper(8) + CMD_LATTICE_END + CMD_GET_DEV_STATE
-    print(f"Debug: Total command data: {len(data)} bytes")
+    feed_amount = 8 + extra_feed
+    data += cmd_feed_paper(feed_amount) + CMD_LATTICE_END + CMD_GET_DEV_STATE
+    print(f"Debug: Total command data: {len(data)} bytes, feed: {feed_amount} pixels")
     return data
 
 # ============================================================================
@@ -355,22 +354,29 @@ def make_text_image(text, font_path='fonts/Helvetica-24.pf2'):
         raise FileNotFoundError(f"Font file not found: {font_path}")
     
     print(f"Debug: Canvas height={canvas.height}, text length={len(text)}")
-    img_bytes = next(canvas.puttext(text))
-    print(f"Debug: Generated {len(img_bytes)} bytes")
-    img = []
-    width = PRINT_WIDTH
-    height = canvas.height
     
-    for y in range(height):
-        row = []
-        for x in range(width):
-            byte_index = (width * y + x) // 8
-            bit_index = 7 - ((width * y + x) % 8)
-            if byte_index < len(img_bytes) and img_bytes[byte_index] & (1 << bit_index):
-                row.append(1)
-            else:
-                row.append(0)
-        img.append(row)
+    # Collect all canvas segments for multi-line text
+    all_segments = list(canvas.puttext(text))
+    print(f"Debug: Generated {len(all_segments)} text segments")
+    
+    img = []
+    for segment in all_segments:
+        if segment is None:
+            continue
+        width = PRINT_WIDTH
+        height = canvas.height
+        
+        for y in range(height):
+            row = []
+            for x in range(width):
+                byte_index = (width * y + x) // 8
+                bit_index = 7 - ((width * y + x) % 8)
+                if byte_index < len(segment) and segment[byte_index] & (1 << bit_index):
+                    row.append(1)
+                else:
+                    row.append(0)
+            img.append(row)
+
     
     # Trim to last ink row + margin
     last_ink_row = 0
@@ -392,13 +398,13 @@ class CatPrinter:
         self.device_mac = device_mac
         self.font_path = font_path
         
-    async def print_text(self, text):
+    async def print_text(self, text, extra_feed=0):
         img = make_text_image(text, self.font_path)
-        await self._send_to_printer(cmds_print_img(img))
+        await self._send_to_printer(cmds_print_img(img, extra_feed=extra_feed))
         
-    async def print_image(self, image_path):
+    async def print_image(self, image_path, extra_feed=0):
         img = load_and_prepare_image(image_path)
-        await self._send_to_printer(cmds_print_img(img))
+        await self._send_to_printer(cmds_print_img(img, extra_feed=extra_feed))
         
     async def _send_to_printer(self, commands):
         print(f"Connecting to {self.device_mac}...")
@@ -441,6 +447,7 @@ def main():
                        help='Printer MAC address (default: CA:06:26:70:8B:06)')
     parser.add_argument('--test', action='store_true', help='Test mode - generate image without printing')
     parser.add_argument('--list-fonts', action='store_true', help='List available fonts')
+    parser.add_argument('--feed', type=int, help='Feed paper by specified pixels (e.g. --feed 50)')
     
     args = parser.parse_args()
     
@@ -453,6 +460,17 @@ def main():
                 print(f"  fonts/{font}")
         else:
             print("No fonts directory found")
+        return
+    
+    if args.feed and not (args.text or args.file or args.stdin or args.image):
+        # Feed only mode
+        async def feed_paper():
+            printer = CatPrinter(args.mac)
+            print(f"Feeding {args.feed} pixels of paper...")
+            feed_cmd = CMD_GET_DEV_STATE + cmd_feed_paper(args.feed) + CMD_GET_DEV_STATE
+            await printer._send_to_printer(feed_cmd)
+            print("Done.")
+        asyncio.run(feed_paper())
         return
     
     def get_text_content():
@@ -486,12 +504,14 @@ def main():
                 text = get_text_content()
                 print(f"Printing text: {text[:50]}{'...' if len(text) > 50 else ''} (font: {args.font})")
                 printer.font_path = args.font
-                await printer.print_text(text)
+                extra_feed = args.feed if args.feed else 0
+                await printer.print_text(text, extra_feed)
                 
             if args.image or not (args.text or args.file or args.stdin or args.image):
                 image_file = args.image if args.image else "cat.jpg"
                 print(f"Printing image: {image_file}")
-                await printer.print_image(image_file)
+                extra_feed = args.feed if args.feed else 0
+                await printer.print_image(image_file, extra_feed)
                 
             print("Done.")
         except FileNotFoundError as e:
