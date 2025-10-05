@@ -1,0 +1,63 @@
+# Development files
+summary.md
+q-dev-chat-2025-08-03.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+test_*.py
+*_test.py
+
+# Internal and temp files
+.internal/
+con.txt
+uv.lock
+cat.jpg
+text.txt
+text_as_image.png
+test.png
+history.md
+summary.md
+config.json
+pyproject.toml
+requirements.txt
+LICENSE
+README.md
+test_printer.py
+printer_py_old
+fonts/
