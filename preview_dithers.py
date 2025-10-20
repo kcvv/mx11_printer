@@ -1,8 +1,9 @@
 """
-preview_dithers.py - Generate preview images for all dithering methods on test.png and cat.jpg
+preview_dithers.py - Generate preview images for all dithering methods.
 """
 from PIL import Image, ImageDraw, ImageFont
 import os
+import argparse
 from image_convert import preprocess_image
 
 def label_image(img, label, width):
@@ -36,17 +37,25 @@ def make_preview_grid(img_path, width, dithers, out_path):
     print(f"Saved preview: {out_path}")
 
 def main():
+    parser = argparse.ArgumentParser(description='Generate preview images for all dithering methods.')
+    parser.add_argument('image_path', type=str, help='Path to the input image file.')
+    parser.add_argument('-o', '--output', type=str, default=None, help='Optional output file path.')
+    args = parser.parse_args()
+
     width = 384
     dithers = [
         'floyd-steinberg', 'none', 'manual', 'bayer', 'atkinson',
         'burkes', 'stucki', 'jarvis', 'sierra', 'random'
     ]
-    for fname in ['cat1.jpg', 'buddha.jpg']:
-        if os.path.exists(fname):
-            out_path = f"preview_{os.path.splitext(fname)[0]}.png"
-            make_preview_grid(fname, width, dithers, out_path)
+
+    if os.path.exists(args.image_path):
+        if args.output:
+            out_path = args.output
         else:
-            print(f"File not found: {fname}")
+            out_path = f"preview_{os.path.splitext(os.path.basename(args.image_path))[0]}.png"
+        make_preview_grid(args.image_path, width, dithers, out_path)
+    else:
+        print(f"File not found: {args.image_path}")
 
 if __name__ == "__main__":
     main()

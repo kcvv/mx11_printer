@@ -1,0 +1,34 @@
+{
+  "mac_address": "CA:06:26:70:8B:06",
+  "defaults": {
+    "concentration": 65535,
+    "speed": 60,
+    "feed_lines": 10,
+    "image_binarization": "floyd-steinberg"
+  },
+  "font": "arial.ttf",
+  "fontsize": 20,
+  "printer_width": 384,
+  "printing": {
+    "anti_streaking": true,
+    "chunk_size": 50,
+    "use_no_chunk_method": false
+  },
+  "image_conversion": {
+  "default_dither": "atkinson",
+    "default_threshold": 128,
+    "default_darkness": 0.5,
+    "dither_defaults": {
+      "floyd-steinberg": {"threshold": 128, "contrast": 1.0, "brightness": 1.0},
+      "none": {"threshold": 128, "contrast": 1.0, "brightness": 1.0},
+      "manual": {"threshold": 128, "contrast": 1.0, "brightness": 1.0},
+      "bayer": {"threshold": 128, "contrast": 1.0, "brightness": 1.0},
+      "atkinson": {"threshold": 128, "contrast": 1.0, "brightness": 1.0},
+      "burkes": {"threshold": 128, "contrast": 1.0, "brightness": 1.0},
+      "stucki": {"threshold": 128, "contrast": 1.0, "brightness": 1.0},
+      "jarvis": {"threshold": 128, "contrast": 1.0, "brightness": 1.0},
+      "sierra": {"threshold": 128, "contrast": 1.0, "brightness": 1.0},
+      "random": {"threshold": 128, "contrast": 1.0, "brightness": 1.0}
+    }
+  }
+}

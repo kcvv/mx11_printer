@@ -54,8 +54,8 @@ class PrinterProfile:
 
 # Profile for MX series printers based on V5G group in the APK
 V5G_PROFILE = PrinterProfile(
-    speed=60,
-    concentration=110, # A good default starting value
+    speed=2,           # Medium speed (1=fast, 2=medium, 3=slow)
+    concentration=125, # Medium darkness (Fun Print optimal: 100-150 range)
     supports_labels=True
 )
 
@@ -263,21 +263,22 @@ class Printer:
         return b_arr
 
     def load_and_prepare_image(self, path, binarization='floyd-steinberg'):
-        img = Image.open(path).convert('L')
-        new_height = int(img.height * PRINT_WIDTH / img.width)
-        img = img.resize((PRINT_WIDTH, new_height), Image.LANCZOS)
+        from image_convert import preprocess_image
         
-        img_array = np.array(img)
+        # Use the preprocess_image function that has all the algorithms
+        img = preprocess_image(
+            path, 
+            width=PRINT_WIDTH,
+            dither=binarization
+        )
         
-        if binarization == 'floyd-steinberg':
-            img_array = self.floyd_steinberg_dither(img_array.copy())
-            binary = img_array > 127
-        else:
-            binary = img_array > 127
+        # Convert PIL image to numpy array then to list format
+        img_array = np.array(img, dtype=np.uint8)
         
+        # Convert to list format expected by printing (1 = black, 0 = white)
         out = []
-        for y in range(binary.shape[0]):
-            row = [1 if not binary[y, x] else 0 for x in range(binary.shape[1])]
+        for y in range(img_array.shape[0]):
+            row = [1 if img_array[y, x] == 0 else 0 for x in range(img_array.shape[1])]
             out.append(row)
         return out
 
@@ -286,26 +287,27 @@ class Printer:
         def adjust_pixel(y, x, delta):
             if y < 0 or y >= h or x < 0 or x >= w:
                 return
-            img[y][x] = min(255, max(0, img[y][x] + delta))
+            new_val = int(img[y][x]) + int(delta)
+            img[y][x] = min(255, max(0, new_val))
         
         for y in range(h):
             for x in range(w):
                 new_val = 255 if img[y][x] > 127 else 0
-                err = img[y][x] - new_val
+                err = int(img[y][x]) - new_val
                 img[y][x] = new_val
-                adjust_pixel(y, x + 1, err * 7/16)
-                adjust_pixel(y + 1, x - 1, err * 3/16)
-                adjust_pixel(y + 1, x, err * 5/16)
-                adjust_pixel(y + 1, x + 1, err * 1/16)
+                adjust_pixel(y, x + 1, int(err * 7/16))
+                adjust_pixel(y + 1, x - 1, int(err * 3/16))
+                adjust_pixel(y + 1, x, int(err * 5/16))
+                adjust_pixel(y + 1, x + 1, int(err * 1/16))
         return img
 
-    async def print_image(self, image_path, energy: int = 0xffff, extra_feed: int = 0, process: bool = True):
+    async def print_image(self, image_path, binarization='floyd-steinberg', energy: int = 0xffff, extra_feed: int = 0, process: bool = True):
         if not self.client or not self.client.is_connected:
             self.logger.error("Not connected to printer.")
             return
         self.logger.info("--- Starting Print Job ---")
         if process:
-            img = self.load_and_prepare_image(image_path)
+            img = self.load_and_prepare_image(image_path, binarization=binarization)
         else:
             from PIL import Image
             import numpy as np
@@ -325,17 +327,68 @@ class Printer:
                     raise ValueError(f"Row contains non-binary values: {row}")
                 out.append(row)
             img = out
-        commands = CMD_GET_STATUS + CMD_SET_QUALITY_200_DPI + cmd_set_energy(energy) + cmd_apply_energy() + CMD_LATTICE_START
-        for row in img:
-            commands += cmd_print_row(row)
-        feed_amount = 8 + extra_feed
-        commands += self._cmd_feed_paper(feed_amount) + CMD_LATTICE_END + CMD_GET_STATUS
-        chunk_size = 20
-        for i in range(0, len(commands), chunk_size):
-            chunk = commands[i:i+chunk_size]
-            await self._write(chunk, response=False)
-            await asyncio.sleep(0.02)
-        self.logger.info("--- Print Job Finished ---")
+        self.logger.info("Initializing printer...")
+        await self._write(CMD_SET_QUALITY_200_DPI)
+        await self.set_speed(8)  # Cat-Printer uses 8 for feeding (lower = faster)
+        await self.set_concentration(0xffff)  # Max concentration for darker print
+        await self._write(cmd_set_energy(energy))
+        await self._write(cmd_apply_energy())
+        await self._write(CMD_LATTICE_START)
+
+        # Use Cat-Printer style: send one line at a time (48 bytes per line)
+        bytes_per_line = PRINT_WIDTH // 8  # 384 // 8 = 48 bytes
+        self.logger.info(f"Sending {len(img)} rows, {bytes_per_line} bytes per line...")
+
+        for i, row in enumerate(img):
+            row_command = cmd_print_row(row)
+            await self._write(row_command)
+            # No delay - keep consistent timing like Cat-Printer
+
+    async def print_image_no_chunks(self, img, energy: int = 0xffff, extra_feed: int = 0):
+        """Print image with optimal chunking to eliminate streaking while respecting BLE limits."""
+        if not self.client or not self.client.is_connected:
+            self.logger.error("Not connected to printer.")
+            return
+        
+        self.logger.info("--- Starting Optimal-Chunk Print Job (Anti-Streaking) ---")
+        
+        # Convert numpy array to list if needed
+        if hasattr(img, 'shape'):
+            binary = (img == 0)
+            out = []
+            for y in range(binary.shape[0]):
+                row = [1 if binary[y, x] else 0 for x in range(binary.shape[1])]
+                if not all(v in (0, 1) for v in row):
+                    raise ValueError(f"Row contains non-binary values: {row}")
+                out.append(row)
+            img = out
+            
+        self.logger.info("Initializing printer...")
+        await self._write(CMD_SET_QUALITY_200_DPI)
+        await self._write(cmd_set_energy(energy))
+        await self._write(cmd_apply_energy())
+        await self._write(CMD_LATTICE_START)
+
+        # Use smaller chunk size for Windows BLE (around 20-30 rows = ~600-900 bytes)
+        optimal_chunk_size = 25
+        num_chunks = (len(img) + optimal_chunk_size - 1) // optimal_chunk_size
+        self.logger.info(f"Sending {len(img)} rows in {num_chunks} optimal chunks...")
+
+        for i in range(num_chunks):
+            chunk_start = i * optimal_chunk_size
+            chunk_end = min(chunk_start + optimal_chunk_size, len(img))
+            chunk_command = bytearray()
+            for row in img[chunk_start:chunk_end]:
+                chunk_command.extend(cmd_print_row(row))
+            
+            # Send chunk without delays
+            await self._write(chunk_command)
+
+        self.logger.info("Finalizing print job...")
+        await self.feed_paper(8 + extra_feed)
+        await self._write(CMD_LATTICE_END)
+        await self._write(CMD_GET_STATUS)
+        self.logger.info("--- Optimal-Chunk Print Job Finished ---")
 
     async def print_image_4bpp(self, image_path, intensity: int = 100, max_height: int = 1000):
         """EXPERIMENTAL: Print a grayscale image in 4bpp mode (if supported by printer). Limits height to max_height px."""

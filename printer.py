@@ -58,6 +58,7 @@ async def run(args, config):
         if args.image:
             await printer.print_image(
                 args.image,
+                binarization=args.img_binarization_algo,
                 energy=args.concentration or config['defaults']['concentration'],
                 process=not args.raw
             )
@@ -103,6 +104,9 @@ def main():
                          help=f'Print concentration/density (0-65535, default: {defaults.get("concentration")}).')
     quality.add_argument('-s', '--speed', type=int, default=defaults.get('speed'),
                          help=f'Print speed (default: {defaults.get("speed")}).')
+    quality.add_argument('-b', '--img-binarization-algo', type=str, default=defaults.get('image_binarization'),
+                         choices=['floyd-steinberg', 'none', 'manual', 'bayer', 'ordered', 'atkinson', 'burkes', 'stucki', 'jarvis', 'sierra', 'random'],
+                         help=f'Image processing algorithm (default: {defaults.get("image_binarization")}).')
     # --- Font Options ---
     font = parser.add_argument_group('Font Options')
     font.add_argument('--font', type=str, default=None, help='Font file name from C:\\Windows\\Fonts (e.g., arial.ttf, times.ttf). Default: arial.ttf')

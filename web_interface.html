@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MX11 Printer Interface</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .form-group { margin: 10px 0; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, select, button { padding: 8px; margin: 5px 0; }
+        button { background: #007cba; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        button:hover { background: #005a87; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 3px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .info { background: #d1ecf1; color: #0c5460; }
+        #preview { max-width: 384px; border: 1px solid #ccc; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>MX11 Thermal Printer Interface</h1>
+    
+    <div class="section">
+        <h2>Printer Status</h2>
+        <button onclick="checkStatus()">Check Status</button>
+        <button onclick="getSerial()">Get Serial</button>
+        <div id="status-display"></div>
+    </div>
+
+    <div class="section">
+        <h2>Print Image</h2>
+        <div class="form-group">
+            <label for="image-file">Select Image:</label>
+            <input type="file" id="image-file" accept="image/*" onchange="handleFileSelect()">
+        </div>
+        
+        <div class="form-group">
+            <label for="binarization">Binarization Method:</label>
+            <select id="binarization" onchange="generatePreview()">
+                <option value="floyd-steinberg">Floyd-Steinberg</option>
+                <option value="atkinson" selected>Atkinson</option>
+                <option value="none">None (Threshold)</option>
+                <option value="bayer">Bayer/Ordered</option>
+                <option value="burkes">Burkes</option>
+                <option value="stucki">Stucki</option>
+                <option value="jarvis">Jarvis-Judice-Ninke</option>
+                <option value="sierra">Sierra</option>
+                <option value="random">Random</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="feed-lines">Feed Lines After Print:</label>
+            <input type="number" id="feed-lines" value="15" min="0" max="100">
+        </div>
+
+        <div id="preview-section" style="display:none;">
+            <h3>Preview (384px width)</h3>
+            <img id="preview-image" style="max-width: 384px; border: 1px solid #ccc; margin: 10px 0;">
+            <div id="preview-info" class="info"></div>
+        </div>
+
+        <button onclick="generatePreview()" id="preview-btn" style="display:none;">Generate Preview</button>
+        <button onclick="printImage()" id="print-btn" style="display:none;">Print Image</button>
+    </div>
+
+    <div class="section">
+        <h2>Print Text</h2>
+        <div class="form-group">
+            <label for="text-input">Text to Print:</label>
+            <textarea id="text-input" rows="4" cols="50" placeholder="Enter text here..."></textarea>
+        </div>
+        
+        <div class="form-group">
+            <label for="font-size">Font Size:</label>
+            <input type="number" id="font-size" value="20" min="8" max="72">
+        </div>
+
+        <button onclick="printText()">Print Text</button>
+    </div>
+
+    <div class="section">
+        <h2>Paper Control</h2>
+        <div class="form-group">
+            <label for="feed-amount">Feed Amount (lines):</label>
+            <input type="number" id="feed-amount" value="10" min="1" max="100">
+        </div>
+        <button onclick="feedPaper()">Feed Paper</button>
+        <button onclick="calibrate()">Calibrate Labels</button>
+    </div>
+
+    <script>
+        function showStatus(message, type = 'info') {
+            const display = document.getElementById('status-display');
+            display.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        async function apiCall(endpoint, data = {}) {
+            try {
+                const response = await fetch(`http://localhost:8080/${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                return await response.json();
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                return null;
+            }
+        }
+
+        async function checkStatus() {
+            showStatus('Checking printer status...', 'info');
+            const result = await apiCall('status');
+            if (result) {
+                showStatus(result.message, result.success ? 'success' : 'error');
+            }
+        }
+
+        async function getSerial() {
+            showStatus('Getting serial number...', 'info');
+            const result = await apiCall('serial');
+            if (result) {
+                showStatus(`Serial: ${result.serial || 'Unknown'}`, result.success ? 'success' : 'error');
+            }
+        }
+
+        async function generatePreview() {
+            const file = document.getElementById('image-file').files[0];
+            if (!file) {
+                document.getElementById('preview-section').style.display = 'none';
+                document.getElementById('print-btn').style.display = 'none';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('image', file);
+            formData.append('binarization', document.getElementById('binarization').value);
+
+            showStatus('Generating preview...', 'info');
+            
+            try {
+                const response = await fetch('http://localhost:8080/preview-image', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    document.getElementById('preview-image').src = result.preview;
+                    document.getElementById('preview-info').textContent = result.message;
+                    document.getElementById('preview-section').style.display = 'block';
+                    document.getElementById('print-btn').style.display = 'inline-block';
+                    showStatus('Preview ready!', 'success');
+                } else {
+                    showStatus(result.message, 'error');
+                }
+            } catch (error) {
+                showStatus(`Preview error: ${error.message}`, 'error');
+            }
+        }
+
+        function handleFileSelect() {
+            const file = document.getElementById('image-file').files[0];
+            if (file) {
+                document.getElementById('preview-btn').style.display = 'inline-block';
+                generatePreview(); // Auto-generate preview when file is selected
+            } else {
+                document.getElementById('preview-section').style.display = 'none';
+                document.getElementById('preview-btn').style.display = 'none';
+                document.getElementById('print-btn').style.display = 'none';
+            }
+        }
+
+        async function printImage() {
+            const file = document.getElementById('image-file').files[0];
+            if (!file) {
+                showStatus('Please select an image first', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('image', file);
+            formData.append('binarization', document.getElementById('binarization').value);
+            formData.append('feed', document.getElementById('feed-lines').value);
+
+            showStatus('Printing image...', 'info');
+            
+            try {
+                const response = await fetch('http://localhost:8080/print-image', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                showStatus(result.message, result.success ? 'success' : 'error');
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function printText() {
+            const text = document.getElementById('text-input').value;
+            if (!text.trim()) {
+                showStatus('Please enter some text', 'error');
+                return;
+            }
+
+            showStatus('Printing text...', 'info');
+            const result = await apiCall('print-text', {
+                text: text,
+                fontSize: document.getElementById('font-size').value,
+                feed: document.getElementById('feed-lines').value
+            });
+            if (result) {
+                showStatus(result.message, result.success ? 'success' : 'error');
+            }
+        }
+
+        async function feedPaper() {
+            const amount = document.getElementById('feed-amount').value;
+            showStatus('Feeding paper...', 'info');
+            const result = await apiCall('feed', { amount: parseInt(amount) });
+            if (result) {
+                showStatus(result.message, result.success ? 'success' : 'error');
+            }
+        }
+
+        async function calibrate() {
+            showStatus('Calibrating labels...', 'info');
+            const result = await apiCall('calibrate');
+            if (result) {
+                showStatus(result.message, result.success ? 'success' : 'error');
+            }
+        }
+
+        // Check status on page load
+        window.onload = checkStatus;
+    </script>
+</body>
+</html>
